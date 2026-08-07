@@ -1,4 +1,10 @@
-# Binaries & Executables
+# Environment & Local Overrides (Keeps secrets/local configs out, allows templates)
+.env
+.env.local
+.env.*.local
+!.env.example
+
+# Go Binaries & Build Artifacts
 *.exe
 *.exe~
 *.dll
@@ -8,13 +14,16 @@
 *.out
 bin/
 
-# Environment & OS
+# Node / React Dependencies & Build Artifacts
+node_modules/
+dist/
+build/
+.gen/
+
+# OS Metadata
 .DS_Store
 Thumbs.db
-*.env
 
-# IDE / Editors
-.vscode/
-.idea/
+# Editor Swap Files
 *.swp
 *.swo
