@@ -15,6 +15,20 @@ const (
 	Chunk24hRate  = 5000.0
 )
 
+// HourlyRate returns the hourly rate by parking slot size.
+func HourlyRate(s domain.SlotSize) float64 {
+	switch s {
+	case domain.SlotSP:
+		return 20.0
+	case domain.SlotMP:
+		return 60.0
+	case domain.SlotLP:
+		return 100.0
+	default:
+		return 0.0
+	}
+}
+
 var (
 	ErrInvalidTimeOrder = errors.New("exit time can't be before entry time")
 	ErrUnknownSlotSize  = errors.New("unknown or unsupported parking slot size")
@@ -33,47 +47,50 @@ func CalculateFee(
 		return 0.0, fmt.Errorf("%w: entry %v is after exit %v", ErrInvalidTimeOrder, entryTime, exitTime)
 	}
 
-	// Computes as a standalone fee if last session is nonexistent or missing exit time
+	// Standalone session: no last session or missing exit time
 	if lastSession == nil || lastSession.ExitTime == nil {
 		return computeBaseFee(slotSize, entryTime, exitTime), nil
 	}
-	// Computes as a standalone fee if not a quick re-entry
-	timeGap := entryTime.Sub(*lastSession.ExitTime)
-	if timeGap > 1*time.Hour || timeGap < 0 {
+	// Not a quick re-entry: gap > 1h or negative
+	gap := entryTime.Sub(*lastSession.ExitTime)
+	if gap > 1*time.Hour || gap < 0 {
 		return computeBaseFee(slotSize, entryTime, exitTime), nil
 	}
 
-	// Initiates calculation of continuous fee for quick re-entry
-	totalDuration := exitTime.Sub(lastSession.EntryTime)
-	prevDuration := lastSession.ExitTime.Sub(lastSession.EntryTime)
+	// Quick re-entry: continuous fee computation
+	rootEntryTime := getRootEntryTime(lastSession)
+	totalDuration := exitTime.Sub(rootEntryTime)
+	prevDuration := lastSession.ExitTime.Sub(rootEntryTime)
 	totalHours := int(math.Ceil(totalDuration.Hours()))
 	prevHours := int(math.Ceil(prevDuration.Hours()))
+
 	if totalHours <= prevHours {
 		return 0.0, nil
 	}
-	// Computes total fee of previous and active session with the active slot size
-	// Subtracts phantom fee (previous session fee with active slot size) after
-	totalFeeForSlot := computeFeeForHours(slotSize, totalHours)
-	prevFeeForSlot := computeFeeForHours(slotSize, prevHours)
-	fee := totalFeeForSlot - prevFeeForSlot
-	if fee < 0 {
+
+	// Crosses 24h boundary
+	totalChunks := totalHours / 24
+	prevChunks := prevHours / 24
+	if totalChunks > prevChunks {
+		totalFeeAtCurrentRate := computeFeeForHours(slotSize, totalHours)
+		sumPreviousFees := sumPreviousFees(lastSession)
+		fee := totalFeeAtCurrentRate - sumPreviousFees
+		if fee < 0 {
+			return 0.0, nil
+		}
+		return fee, nil
+	}
+
+	// No 24h boundary crossed
+	flatRateTime := rootEntryTime.Add(FlatRateHours * time.Hour)
+	billableStart := computeBillableStart(*lastSession.ExitTime, flatRateTime)
+	billableDuration := exitTime.Sub(billableStart)
+	if billableDuration <= 0 {
 		return 0.0, nil
 	}
+	billableHours := int(math.Ceil(billableDuration.Hours()))
+	fee := float64(billableHours) * HourlyRate(slotSize)
 	return fee, nil
-}
-
-// HourlyRate returns the hourly rate by parking slot size.
-func HourlyRate(s domain.SlotSize) float64 {
-	switch s {
-	case domain.SlotSP:
-		return 20.0
-	case domain.SlotMP:
-		return 60.0
-	case domain.SlotLP:
-		return 100.0
-	default:
-		return 0.0
-	}
 }
 
 // computeFeeForHours is the core pricing formula for a given total hour duration.
@@ -104,4 +121,42 @@ func computeBaseFee(slotSize domain.SlotSize, entryTime, exitTime time.Time) flo
 	}
 	hours := int(math.Ceil(duration.Hours()))
 	return computeFeeForHours(slotSize, hours)
+}
+
+// getRootEntryTime finds the initial entry time of a chained session.
+func getRootEntryTime(session *domain.ParkingSession) time.Time {
+	current := session
+	for current.PreviousSession != nil && current.PreviousSession.ExitTime != nil {
+		gap := current.EntryTime.Sub(*current.PreviousSession.ExitTime)
+		if gap > 1*time.Hour || gap < 0 {
+			break
+		}
+		current = current.PreviousSession
+	}
+	return current.EntryTime
+}
+
+// computeBillableStart returns the start time for billable duration.
+func computeBillableStart(prevExit, flatRateTime time.Time) time.Time {
+	if prevExit.After(flatRateTime) {
+		return prevExit
+	}
+	return flatRateTime
+}
+
+// sumPreviousFees sums TotalFeeCharged and stops at gap > 1h.
+func sumPreviousFees(session *domain.ParkingSession) float64 {
+	sum := session.TotalFeeCharged
+	previous := session.PreviousSession
+	currentEntry := session.EntryTime
+	for previous != nil && previous.ExitTime != nil {
+		gap := currentEntry.Sub(*previous.ExitTime)
+		if gap > 1*time.Hour || gap < 0 {
+			break
+		}
+		sum += previous.TotalFeeCharged
+		currentEntry = previous.EntryTime
+		previous = previous.PreviousSession
+	}
+	return sum
 }

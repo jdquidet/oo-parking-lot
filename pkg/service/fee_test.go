@@ -204,7 +204,7 @@ func TestCalculateFee_ContinuedSessions(t *testing.T) {
 				ExitTime:        timePtr(baseTime.Add(25 * time.Hour)),
 				TotalFeeCharged: 5020.0, // 1*5000 + 1*20
 			},
-			expected: 5200.0, // 1*5000 + 2*100
+			expected: 5280.0, // (2*5000 + 3*100) - 5020 = 10300 - 5020
 		},
 		{
 			name:      "Re-entry within 30m, still under 3h window: 1h + 15m + 45m",
@@ -217,6 +217,153 @@ func TestCalculateFee_ContinuedSessions(t *testing.T) {
 				TotalFeeCharged: 40.0,
 			},
 			expected: 0.0, // Flat rate already paid
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			fee, err := CalculateFee(tt.slot, tt.entryTime, tt.exitTime, tt.lastSession)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if fee != tt.expected {
+				t.Errorf("expected %.2f, got %.2f", tt.expected, fee)
+			}
+		})
+	}
+}
+
+func TestCalculateFee_ChainedSessions(t *testing.T) {
+	// Setup LP chain
+	sessionL1 := &domain.ParkingSession{
+		EntryTime:       baseTime,
+		ExitTime:        timePtr(baseTime.Add(2 * time.Hour)),
+		TotalFeeCharged: 40.0,
+	}
+	sessionL2 := &domain.ParkingSession{
+		EntryTime:       baseTime.Add(2*time.Hour + 15*time.Minute),
+		ExitTime:        timePtr(baseTime.Add(2*time.Hour + 30*time.Minute)),
+		TotalFeeCharged: 0.0,
+		PreviousSession: sessionL1,
+	}
+	// Setup MP chain
+	sessionM1 := &domain.ParkingSession{
+		EntryTime:       baseTime,
+		ExitTime:        timePtr(baseTime.Add(22 * time.Hour)),
+		TotalFeeCharged: 1180.0,
+	}
+	sessionM2 := &domain.ParkingSession{
+		EntryTime:       baseTime.Add(22*time.Hour + 15*time.Minute),
+		ExitTime:        timePtr(baseTime.Add(22*time.Hour + 30*time.Minute)),
+		TotalFeeCharged: 60.0,
+		PreviousSession: sessionM1,
+	}
+	// Setup multi-slot chain: SP(2h) -> MP(2h + 15m gap) -> LP(2h + 15m gap)
+	sessionSP := &domain.ParkingSession{
+		EntryTime:       baseTime,
+		ExitTime:        timePtr(baseTime.Add(2 * time.Hour)),
+		TotalFeeCharged: 40.0,
+	}
+	sessionMP := &domain.ParkingSession{
+		EntryTime:       baseTime.Add(2*time.Hour + 15*time.Minute),
+		ExitTime:        timePtr(baseTime.Add(4*time.Hour + 15*time.Minute)),
+		TotalFeeCharged: 120.0,
+		PreviousSession: sessionSP,
+	}
+	// Setup 24h boundary crossing: SP(23h) -> LP(2h)
+	sessionChunk := &domain.ParkingSession{
+		EntryTime:       baseTime,
+		ExitTime:        timePtr(baseTime.Add(23 * time.Hour)),
+		TotalFeeCharged: 440.0, // 40 + 20*20
+	}
+
+	tests := []struct {
+		name        string
+		slot        domain.SlotSize
+		entryTime   time.Time
+		exitTime    time.Time
+		lastSession *domain.ParkingSession
+		expected    float64
+	}{
+		{
+			name:        "3-session LP chain: Prevent hourly rate bypass",
+			slot:        domain.SlotLP,
+			entryTime:   baseTime.Add(2*time.Hour + 45*time.Minute),
+			exitTime:    baseTime.Add(4*time.Hour + 45*time.Minute),
+			lastSession: sessionL2,
+			expected:    200.0, // 5h LP (240) - 3h LP (40)
+		},
+		{
+			name:        "3-session MP chain: Prevent 24h threshold bypass",
+			slot:        domain.SlotMP,
+			entryTime:   baseTime.Add(22*time.Hour + 45*time.Minute),
+			exitTime:    baseTime.Add(44*time.Hour + 45*time.Minute),
+			lastSession: sessionM2,
+			expected:    5020.0, // 45h MP (6260) - 23h MP (1240)
+		},
+		{
+			name:        "Multi-slot chain: SP(2h) -> MP(2h+15m gap) -> LP(2h+15m gap) = 460",
+			slot:        domain.SlotLP,
+			entryTime:   baseTime.Add(4*time.Hour + 30*time.Minute),
+			exitTime:    baseTime.Add(6*time.Hour + 30*time.Minute),
+			lastSession: sessionMP,
+			expected:    300.0, // ceil(2h15m)=3h at LP rate 100
+		},
+		{
+			name:        "Multi-slot chain: 24h boundary crossing SP(23h) -> LP(2h) = 4660",
+			slot:        domain.SlotLP,
+			entryTime:   baseTime.Add(23*time.Hour + 15*time.Minute),
+			exitTime:    baseTime.Add(25 * time.Hour),
+			lastSession: sessionChunk,
+			expected:    4660.0, // (5000 + 1*100) - 440
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			fee, err := CalculateFee(tt.slot, tt.entryTime, tt.exitTime, tt.lastSession)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if fee != tt.expected {
+				t.Errorf("expected %.2f, got %.2f", tt.expected, fee)
+			}
+		})
+	}
+}
+
+func TestSumPreviousFees_ChainBoundary(t *testing.T) {
+	// Day 1: Session 0 (2h on SP) -> Paid 40.0. Exits Day 1, 02:00.
+	// Gap of 22 hours (>1h gap)
+	session0Old := &domain.ParkingSession{
+		EntryTime:       baseTime.Add(-24 * time.Hour),
+		ExitTime:        timePtr(baseTime.Add(-22 * time.Hour)),
+		TotalFeeCharged: 40.0,
+	}
+	// Day 2: Session 1 (23h on SP) -> Paid 440.0. Enters Day 2, 00:00. Exits Day 2, 23:00.
+	// Has pointer to session0Old, but separated by >1h gap.
+	session1Active := &domain.ParkingSession{
+		EntryTime:       baseTime,
+		ExitTime:        timePtr(baseTime.Add(23 * time.Hour)),
+		TotalFeeCharged: 440.0,
+		PreviousSession: session0Old,
+	}
+
+	tests := []struct {
+		name        string
+		slot        domain.SlotSize
+		entryTime   time.Time
+		exitTime    time.Time
+		lastSession *domain.ParkingSession
+		expected    float64
+	}{
+		{
+			name:        "Excludes fees prior to >1h gap when crossing 24h chunk boundary",
+			slot:        domain.SlotLP,
+			entryTime:   baseTime.Add(23*time.Hour + 15*time.Minute),
+			exitTime:    baseTime.Add(25*time.Hour + 15*time.Minute),
+			lastSession: session1Active,
+			expected:    4760.0, // 26h LP (5200) - 23h SP (440) = 4760
 		},
 	}
 

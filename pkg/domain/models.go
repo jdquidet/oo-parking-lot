@@ -104,14 +104,15 @@ func (ps *ParkingSlot) DistanceFrom(gateID int) (int, error) {
 
 // ParkingSession represents an active or historical parking record for a vehicle.
 type ParkingSession struct {
-	ID              string      `json:"id"`
-	VehicleID       string      `json:"vehicle_id"`
-	VehicleSize     VehicleSize `json:"vehicle_size"`
-	SlotID          int         `json:"slot_id"`
-	SlotSize        SlotSize    `json:"slot_size"`
-	GateID          int         `json:"gate_id"`
-	EntryTime       time.Time   `json:"entry_time"`
-	ExitTime        *time.Time  `json:"exit_time,omitempty"`
-	TotalFeeCharged float64     `json:"total_fee_charged"`
-	IsActive        bool        `json:"is_active"`
+	ID              string          `json:"id"`
+	VehicleID       string          `json:"vehicle_id"`
+	VehicleSize     VehicleSize     `json:"vehicle_size"`
+	SlotID          int             `json:"slot_id"`
+	SlotSize        SlotSize        `json:"slot_size"`
+	GateID          int             `json:"gate_id"`
+	EntryTime       time.Time       `json:"entry_time"`
+	ExitTime        *time.Time      `json:"exit_time,omitempty"`
+	TotalFeeCharged float64         `json:"total_fee_charged"`
+	IsActive        bool            `json:"is_active"`
+	PreviousSession *ParkingSession `json:"-"` // Linked chain for continued sessions
 }
