@@ -1,9 +1,10 @@
 package service
 
 import (
-	"github.com/jdquidet/oo-parking-lot/pkg/domain"
 	"math"
 	"time"
+
+	"github.com/jdquidet/oo-parking-lot/pkg/domain"
 )
 
 const (
@@ -12,7 +13,44 @@ const (
 	Chunk24hRate  = 5000.0
 )
 
-// Hourly rate by parking slot size
+// CalculateFee calculates base fee with additional fee based on re-entry within an hour.
+func CalculateFee(
+	slotSize domain.SlotSize,
+	entryTime, exitTime time.Time,
+	lastSession *domain.ParkingSession,
+) float64 {
+	// Computes as a standalone fee if last session is nonexistent or missing exit time
+	if lastSession == nil || lastSession.ExitTime == nil {
+		return computeBaseFee(slotSize, entryTime, exitTime)
+	}
+
+	// Computes as a standalone fee if not a quick re-entry
+	timeGap := entryTime.Sub(*lastSession.ExitTime)
+	if timeGap > 1*time.Hour || timeGap < 0 {
+		return computeBaseFee(slotSize, entryTime, exitTime)
+	}
+
+	// Initiates calculation of continuous fee for quick re-entry
+	totalDuration := exitTime.Sub(lastSession.EntryTime)
+	prevDuration := lastSession.ExitTime.Sub(lastSession.EntryTime)
+	totalHours := int(math.Ceil(totalDuration.Hours()))
+	prevHours := int(math.Ceil(prevDuration.Hours()))
+	if totalHours <= prevHours {
+		return 0.0
+	}
+
+	// Computes total fee of previous and active session with the active slot size
+	// Subtracts phantom fee (previous session fee with active slot size) after
+	totalFeeForSlot := computeFeeForHours(slotSize, totalHours)
+	prevFeeForSlot := computeFeeForHours(slotSize, prevHours)
+	fee := totalFeeForSlot - prevFeeForSlot
+	if fee < 0 {
+		return 0.0
+	}
+	return fee
+}
+
+// HourlyRate returns the hourly rate by parking slot size.
 func HourlyRate(s domain.SlotSize) float64 {
 	switch s {
 	case domain.SlotSP:
@@ -32,13 +70,13 @@ func computeFeeForHours(slotSize domain.SlotSize, hours int) float64 {
 		return 0.0
 	}
 
-	// 24-hour chunk pricing.
+	// 24-hour chunk pricing
 	if days := hours / 24; days > 0 {
 		extraHours := hours % 24
 		return (float64(days) * Chunk24hRate) + (float64(extraHours) * HourlyRate(slotSize))
 	}
 
-	// Under 24 hours pricing.
+	// Under 24 hours pricing
 	fee := FlatRate
 	if extraHours := hours - FlatRateHours; extraHours > 0 {
 		fee += float64(extraHours) * HourlyRate(slotSize)
@@ -54,41 +92,4 @@ func computeBaseFee(slotSize domain.SlotSize, entryTime, exitTime time.Time) flo
 	}
 	hours := int(math.Ceil(duration.Hours()))
 	return computeFeeForHours(slotSize, hours)
-}
-
-// CalculateFee calculates base fee with additional fee based on re-entry within an hour.
-func CalculateFee(
-	slotSize domain.SlotSize,
-	entryTime, exitTime time.Time,
-	lastSession *domain.ParkingSession,
-) float64 {
-	// Computes as a standalone fee if last session is nonexistent or missing exit time.
-	if lastSession == nil || lastSession.ExitTime == nil {
-		return computeBaseFee(slotSize, entryTime, exitTime)
-	}
-
-	// Computes as a standalone fee if not a quick re-entry.
-	timeGap := entryTime.Sub(*lastSession.ExitTime)
-	if timeGap > 1*time.Hour || timeGap < 0 {
-		return computeBaseFee(slotSize, entryTime, exitTime)
-	}
-
-	// Initiates calculation of continuous fee for quick re-entry.
-	totalDuration := exitTime.Sub(lastSession.EntryTime)
-	prevDuration := lastSession.ExitTime.Sub(lastSession.EntryTime)
-	totalHours := int(math.Ceil(totalDuration.Hours()))
-	prevHours := int(math.Ceil(prevDuration.Hours()))
-	if totalHours <= prevHours {
-		return 0.0
-	}
-
-	// Computes total fee of previous and active session with the active slot size.
-	// Subtracts phantom fee (previous session fee with active slot size) after.
-	totalFeeForSlot := computeFeeForHours(slotSize, totalHours)
-	prevFeeForSlot := computeFeeForHours(slotSize, prevHours)
-	fee := totalFeeForSlot - prevFeeForSlot
-	if fee < 0 {
-		return 0.0
-	}
-	return fee
 }

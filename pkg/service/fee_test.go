@@ -1,9 +1,10 @@
 package service
 
 import (
-	"github.com/jdquidet/oo-parking-lot/pkg/domain"
 	"testing"
 	"time"
+
+	"github.com/jdquidet/oo-parking-lot/pkg/domain"
 )
 
 var baseTime = time.Date(2026, time.August, 11, 17, 0, 0, 0, time.FixedZone("UTC+8", 8*60*60))
@@ -100,7 +101,7 @@ func TestCalculateFee_StandaloneSessions(t *testing.T) {
 		{
 			name:      "Re-entry > 1 hour: computes standalone base fee",
 			slot:      domain.SlotSP,
-			entryTime: baseTime.Add(2 * time.Hour), // 1.5h gap from previous exit
+			entryTime: baseTime.Add(2 * time.Hour), // 1.5h gap from previous session
 			exitTime:  baseTime.Add(4 * time.Hour),
 			lastSession: &domain.ParkingSession{
 				EntryTime:       baseTime,
@@ -112,7 +113,7 @@ func TestCalculateFee_StandaloneSessions(t *testing.T) {
 		{
 			name:      "Negative time gap anomaly: computes base fee",
 			slot:      domain.SlotSP,
-			entryTime: baseTime.Add(-5 * time.Minute), // 1.5h gap from previous exit
+			entryTime: baseTime.Add(-5 * time.Minute), // 1.5h gap from previous session
 			exitTime:  baseTime.Add(2 * time.Hour),
 			lastSession: &domain.ParkingSession{
 				EntryTime:       baseTime.Add(-10 * time.Hour),
