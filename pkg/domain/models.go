@@ -1,8 +1,14 @@
 package domain
 
 import (
+	"errors"
 	"fmt"
 	"time"
+)
+
+var (
+	ErrGateNotFound    = errors.New("gate distance mapping not found")
+	ErrInvalidDistance = errors.New("distance value can't be negative")
 )
 
 // VehicleSize represents the physical classification of a vehicle.
@@ -86,8 +92,12 @@ type ParkingSlot struct {
 // DistanceFrom returns the distance unit from the parking slot to a given gate ID.
 func (ps *ParkingSlot) DistanceFrom(gateID int) (int, error) {
 	dist, ok := ps.Distances[gateID]
+
 	if !ok {
-		return 0, fmt.Errorf("no distance found for gate ID %d", gateID)
+		return 0, fmt.Errorf("%w: gate ID %d in slot %d", ErrGateNotFound, gateID, ps.ID)
+	}
+	if dist < 0 {
+		return 0, fmt.Errorf("%w: negative distance %d for gate ID %d in slot %d", ErrInvalidDistance, dist, gateID, ps.ID)
 	}
 	return dist, nil
 }

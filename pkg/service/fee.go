@@ -1,6 +1,8 @@
 package service
 
 import (
+	"errors"
+	"fmt"
 	"math"
 	"time"
 
@@ -13,21 +15,32 @@ const (
 	Chunk24hRate  = 5000.0
 )
 
+var (
+	ErrInvalidTimeOrder = errors.New("exit time can't be before entry time")
+	ErrUnknownSlotSize  = errors.New("unknown or unsupported parking slot size")
+)
+
 // CalculateFee calculates base fee with additional fee based on re-entry within an hour.
 func CalculateFee(
 	slotSize domain.SlotSize,
 	entryTime, exitTime time.Time,
 	lastSession *domain.ParkingSession,
-) float64 {
-	// Computes as a standalone fee if last session is nonexistent or missing exit time
-	if lastSession == nil || lastSession.ExitTime == nil {
-		return computeBaseFee(slotSize, entryTime, exitTime)
+) (float64, error) {
+	if slotSize < domain.SlotSP || slotSize > domain.SlotLP {
+		return 0.0, fmt.Errorf("%w: %v", ErrUnknownSlotSize, slotSize)
+	}
+	if exitTime.Before(entryTime) {
+		return 0.0, fmt.Errorf("%w: entry %v is after exit %v", ErrInvalidTimeOrder, entryTime, exitTime)
 	}
 
+	// Computes as a standalone fee if last session is nonexistent or missing exit time
+	if lastSession == nil || lastSession.ExitTime == nil {
+		return computeBaseFee(slotSize, entryTime, exitTime), nil
+	}
 	// Computes as a standalone fee if not a quick re-entry
 	timeGap := entryTime.Sub(*lastSession.ExitTime)
 	if timeGap > 1*time.Hour || timeGap < 0 {
-		return computeBaseFee(slotSize, entryTime, exitTime)
+		return computeBaseFee(slotSize, entryTime, exitTime), nil
 	}
 
 	// Initiates calculation of continuous fee for quick re-entry
@@ -36,18 +49,17 @@ func CalculateFee(
 	totalHours := int(math.Ceil(totalDuration.Hours()))
 	prevHours := int(math.Ceil(prevDuration.Hours()))
 	if totalHours <= prevHours {
-		return 0.0
+		return 0.0, nil
 	}
-
 	// Computes total fee of previous and active session with the active slot size
 	// Subtracts phantom fee (previous session fee with active slot size) after
 	totalFeeForSlot := computeFeeForHours(slotSize, totalHours)
 	prevFeeForSlot := computeFeeForHours(slotSize, prevHours)
 	fee := totalFeeForSlot - prevFeeForSlot
 	if fee < 0 {
-		return 0.0
+		return 0.0, nil
 	}
-	return fee
+	return fee, nil
 }
 
 // HourlyRate returns the hourly rate by parking slot size.

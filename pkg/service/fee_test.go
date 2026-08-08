@@ -1,6 +1,7 @@
 package service
 
 import (
+	"errors"
 	"testing"
 	"time"
 
@@ -78,6 +79,7 @@ func TestCalculateFee_StandaloneSessions(t *testing.T) {
 		exitTime    time.Time
 		lastSession *domain.ParkingSession
 		expected    float64
+		expectedErr error
 	}{
 		{
 			name:        "No last session: computes base fee",
@@ -122,11 +124,36 @@ func TestCalculateFee_StandaloneSessions(t *testing.T) {
 			},
 			expected: 40.0,
 		},
+		{
+			name:        "Returns ErrInvalidTimeOrder when exit time is before entry time",
+			slot:        domain.SlotSP,
+			entryTime:   baseTime.Add(2 * time.Hour),
+			exitTime:    baseTime, // Exit before entry
+			lastSession: nil,
+			expectedErr: ErrInvalidTimeOrder,
+		},
+		{
+			name:        "Returns ErrUnknownSlotSize when slot size is unknown",
+			slot:        domain.SlotSize(99),
+			entryTime:   baseTime,
+			exitTime:    baseTime.Add(2 * time.Hour),
+			lastSession: nil,
+			expectedErr: ErrUnknownSlotSize,
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			fee := CalculateFee(tt.slot, tt.entryTime, tt.exitTime, tt.lastSession)
+			fee, err := CalculateFee(tt.slot, tt.entryTime, tt.exitTime, tt.lastSession)
+			if tt.expectedErr != nil {
+				if !errors.Is(err, tt.expectedErr) {
+					t.Fatalf("expected error %v, got %v", tt.expectedErr, err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
 			if fee != tt.expected {
 				t.Errorf("expected %.2f, got %.2f", tt.expected, fee)
 			}
@@ -195,7 +222,10 @@ func TestCalculateFee_ContinuedSessions(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			fee := CalculateFee(tt.slot, tt.entryTime, tt.exitTime, tt.lastSession)
+			fee, err := CalculateFee(tt.slot, tt.entryTime, tt.exitTime, tt.lastSession)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
 			if fee != tt.expected {
 				t.Errorf("expected %.2f, got %.2f", tt.expected, fee)
 			}
