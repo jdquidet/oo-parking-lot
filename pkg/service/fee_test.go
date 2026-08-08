@@ -6,7 +6,9 @@ import (
 	"time"
 )
 
-func TestCalculateBaseFee(t *testing.T) {
+var baseTime = time.Date(2026, time.August, 11, 17, 0, 0, 0, time.FixedZone("UTC+8", 8*60*60))
+
+func TestComputeBaseFee(t *testing.T) {
 	tests := []struct {
 		name     string
 		slot     domain.SlotSize
@@ -50,20 +52,156 @@ func TestCalculateBaseFee(t *testing.T) {
 			expected: 5120.0,
 		},
 		{
-			name:     "Exact 49h (LP): (2*5000)+100 = 10100",
-			slot:     domain.SlotLP,
-			duration: 49 * time.Hour,
-			expected: 10100.0,
+			name:     "Zero or negative duration",
+			slot:     domain.SlotSP,
+			duration: -1 * time.Hour,
+			expected: 0.0,
 		},
 	}
 
-	now := time.Now()
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			fee := CalculateBaseFee(tt.slot, now, now.Add(tt.duration))
+			fee := computeBaseFee(tt.slot, baseTime, baseTime.Add(tt.duration))
 			if fee != tt.expected {
 				t.Errorf("expected %.2f, got %.2f", tt.expected, fee)
 			}
 		})
 	}
+}
+
+func TestCalculateFee_StandaloneSessions(t *testing.T) {
+	tests := []struct {
+		name        string
+		slot        domain.SlotSize
+		entryTime   time.Time
+		exitTime    time.Time
+		lastSession *domain.ParkingSession
+		expected    float64
+	}{
+		{
+			name:        "No last session: computes base fee",
+			slot:        domain.SlotSP,
+			entryTime:   baseTime,
+			exitTime:    baseTime.Add(2 * time.Hour),
+			lastSession: nil,
+			expected:    40.0,
+		},
+		{
+			name:      "Last session missing exit time: computes base fee",
+			slot:      domain.SlotMP,
+			entryTime: baseTime,
+			exitTime:  baseTime.Add(4 * time.Hour),
+			lastSession: &domain.ParkingSession{
+				EntryTime: baseTime.Add(-10 * time.Hour),
+				ExitTime:  nil,
+			},
+			expected: 100.0, // 40 + (1 * 60)
+		},
+		{
+			name:      "Re-entry > 1 hour: computes standalone base fee",
+			slot:      domain.SlotSP,
+			entryTime: baseTime.Add(2 * time.Hour), // 1.5h gap from previous exit
+			exitTime:  baseTime.Add(4 * time.Hour),
+			lastSession: &domain.ParkingSession{
+				EntryTime:       baseTime,
+				ExitTime:        timePtr(baseTime.Add(30 * time.Minute)),
+				TotalFeeCharged: 40.0,
+			},
+			expected: 40.0,
+		},
+		{
+			name:      "Negative time gap anomaly: computes base fee",
+			slot:      domain.SlotSP,
+			entryTime: baseTime.Add(-5 * time.Minute), // 1.5h gap from previous exit
+			exitTime:  baseTime.Add(2 * time.Hour),
+			lastSession: &domain.ParkingSession{
+				EntryTime:       baseTime.Add(-10 * time.Hour),
+				ExitTime:        timePtr(baseTime),
+				TotalFeeCharged: 180.0,
+			},
+			expected: 40.0,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			fee := CalculateFee(tt.slot, tt.entryTime, tt.exitTime, tt.lastSession)
+			if fee != tt.expected {
+				t.Errorf("expected %.2f, got %.2f", tt.expected, fee)
+			}
+		})
+	}
+}
+
+func TestCalculateFee_ContinuedSessions(t *testing.T) {
+	tests := []struct {
+		name        string
+		slot        domain.SlotSize
+		entryTime   time.Time
+		exitTime    time.Time
+		lastSession *domain.ParkingSession
+		expected    float64
+	}{
+		{
+			name:      "Quick re-entry within 30m (Same SP slot): 4h + 30m + 1h",
+			slot:      domain.SlotSP,
+			entryTime: baseTime.Add(4*time.Hour + 30*time.Minute),
+			exitTime:  baseTime.Add(5*time.Hour + 30*time.Minute),
+			lastSession: &domain.ParkingSession{
+				EntryTime:       baseTime,
+				ExitTime:        timePtr(baseTime.Add(4 * time.Hour)),
+				TotalFeeCharged: 60.0,
+			},
+			expected: 40.0,
+		},
+		{
+			name:      "Quick re-entry with slot switch (SP -> LP): SP(4h) + LP(30m+1h)",
+			slot:      domain.SlotLP,
+			entryTime: baseTime.Add(4*time.Hour + 30*time.Minute),
+			exitTime:  baseTime.Add(5*time.Hour + 30*time.Minute),
+			lastSession: &domain.ParkingSession{
+				EntryTime:       baseTime,
+				ExitTime:        timePtr(baseTime.Add(4 * time.Hour)),
+				TotalFeeCharged: 60.0,
+			},
+			expected: 200.0,
+		},
+		{
+			name:      "24h+ last session with 24h+ continued session  (SP -> LP): SP(25h) + LP(30m+25h)",
+			slot:      domain.SlotLP,
+			entryTime: baseTime.Add(25*time.Hour + 30*time.Minute),
+			exitTime:  baseTime.Add(50*time.Hour + 30*time.Minute),
+			lastSession: &domain.ParkingSession{
+				EntryTime:       baseTime,
+				ExitTime:        timePtr(baseTime.Add(25 * time.Hour)),
+				TotalFeeCharged: 5020.0, // 1*5000 + 1*20
+			},
+			expected: 5200.0, // 1*5000 + 2*100
+		},
+		{
+			name:      "Re-entry within 30m, still under 3h window: 1h + 15m + 45m",
+			slot:      domain.SlotSP,
+			entryTime: baseTime.Add(1*time.Hour + 15*time.Minute),
+			exitTime:  baseTime.Add(2 * time.Hour),
+			lastSession: &domain.ParkingSession{
+				EntryTime:       baseTime,
+				ExitTime:        timePtr(baseTime.Add(1 * time.Hour)),
+				TotalFeeCharged: 40.0,
+			},
+			expected: 0.0, // Flat rate already paid
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			fee := CalculateFee(tt.slot, tt.entryTime, tt.exitTime, tt.lastSession)
+			if fee != tt.expected {
+				t.Errorf("expected %.2f, got %.2f", tt.expected, fee)
+			}
+		})
+	}
+}
+
+func timePtr(t time.Time) *time.Time {
+	return &t
 }
