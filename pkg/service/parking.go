@@ -69,6 +69,9 @@ func (s *parkingService) Park(
 		EntryTime:   entryTime,
 		IsActive:    true,
 	}
+	if last, err := s.repo.GetLastSessionByVehicle(vehicle.LicensePlate); err == nil {
+		session.PreviousSession = last
+	}
 	if err := s.repo.SaveSession(session); err != nil {
 		return nil, nil, err
 	}
@@ -82,18 +85,16 @@ func (s *parkingService) Unpark(
 ) (*domain.ParkingSession, float64, error) {
 	activeSession, err := s.repo.GetActiveSessionByVehicle(licensePlate)
 	if err != nil {
-		return nil, 0.0, ErrNoActiveSession
+		return nil, 0.0, fmt.Errorf("%w: %v", ErrNoActiveSession, err)
 	}
 	if exitTime.Before(activeSession.EntryTime) {
-		return nil, 0.0, errors.New("exit time can't be prior to entry time")
+		return nil, 0.0, fmt.Errorf("%w", ErrInvalidTimeOrder)
 	}
 
 	// Fetch last inactive session for continuous rate check
 	var previousSession *domain.ParkingSession
-	if last, err := s.repo.GetLastSessionByVehicle(licensePlate); err != nil {
-		if !last.IsActive {
-			previousSession = last
-		}
+	if last, err := s.repo.GetLastSessionByVehicle(licensePlate); err == nil {
+		previousSession = last
 	}
 
 	fee, err := CalculateFee(activeSession.SlotSize, activeSession.EntryTime, exitTime, previousSession)

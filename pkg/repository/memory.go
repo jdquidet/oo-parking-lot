@@ -9,7 +9,6 @@ import (
 
 var (
 	ErrSlotNotFound    = errors.New("parking slot not found")
-	ErrGateNotFound    = errors.New("gate not found")
 	ErrSessionNotFound = errors.New("parking session not found")
 )
 
@@ -68,7 +67,7 @@ func (r *MemoryRepository) GetGate(id int) (*domain.Gate, error) {
 	defer r.mu.RUnlock()
 	g, ok := r.gates[id]
 	if !ok {
-		return nil, ErrGateNotFound
+		return nil, domain.ErrGateNotFound
 	}
 	return g, nil
 }
@@ -130,7 +129,7 @@ func (r *MemoryRepository) GetLastSessionByVehicle(licensePlate string) (*domain
 	defer r.mu.RUnlock()
 	var last *domain.ParkingSession
 	for _, s := range r.sessions {
-		if s.VehicleID == licensePlate {
+		if s.VehicleID == licensePlate && !s.IsActive {
 			if last == nil || s.EntryTime.After(last.EntryTime) {
 				last = s
 			}
