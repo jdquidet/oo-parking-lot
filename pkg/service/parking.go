@@ -15,6 +15,7 @@ var (
 )
 
 type ParkingService interface {
+	FindAvailableSlot(vehicleSize domain.VehicleSize, gateID int) (*domain.ParkingSlot, error)
 	Park(vehicle domain.Vehicle, gateID int, entryTime time.Time) (*domain.ParkingSession, *domain.ParkingSlot, error)
 	Unpark(licensePlate string, exitTime time.Time) (*domain.ParkingSession, float64, error)
 }
@@ -27,12 +28,29 @@ func NewParkingService(repo repository.ParkingRepository) ParkingService {
 	return &parkingService{repo: repo}
 }
 
+func (s *parkingService) FindAvailableSlot(vehicleSize domain.VehicleSize, gateID int) (*domain.ParkingSlot, error) {
+	if _, err := s.repo.GetGate(gateID); err != nil {
+		return nil, err
+	}
+	slots, err := s.repo.GetSlots()
+	if err != nil {
+		return nil, err
+	}
+	return domain.FindOptimalSlot(slots, domain.Vehicle{Size: vehicleSize}, gateID)
+}
+
 // Park handles entry of a vehicle into the parking complex.
 func (s *parkingService) Park(
 	vehicle domain.Vehicle,
 	gateID int,
 	entryTime time.Time,
 ) (*domain.ParkingSession, *domain.ParkingSlot, error) {
+	validPlate, err := domain.ValidateLicensePlate(vehicle.LicensePlate)
+	if err != nil {
+		return nil, nil, err
+	}
+	vehicle.LicensePlate = validPlate
+
 	// Verify gate exists
 	if _, err := s.repo.GetGate(gateID); err != nil {
 		return nil, nil, err
@@ -83,6 +101,12 @@ func (s *parkingService) Unpark(
 	licensePlate string,
 	exitTime time.Time,
 ) (*domain.ParkingSession, float64, error) {
+	validPlate, err := domain.ValidateLicensePlate(licensePlate)
+	if err != nil {
+		return nil, 0.0, err
+	}
+	licensePlate = validPlate
+
 	activeSession, err := s.repo.GetActiveSessionByVehicle(licensePlate)
 	if err != nil {
 		return nil, 0.0, fmt.Errorf("%w: %v", ErrNoActiveSession, err)

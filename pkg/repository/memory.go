@@ -17,6 +17,7 @@ type ParkingRepository interface {
 	AddGate(gate *domain.Gate) error
 	GetGates() ([]*domain.Gate, error)
 	GetGate(id int) (*domain.Gate, error)
+	RemoveGate(id int) error
 
 	AddSlot(slot *domain.ParkingSlot) error
 	GetSlots() ([]*domain.ParkingSlot, error)
@@ -24,6 +25,7 @@ type ParkingRepository interface {
 	UpdateSlot(slot *domain.ParkingSlot) error
 
 	SaveSession(session *domain.ParkingSession) error
+	GetSessions() ([]*domain.ParkingSession, error)
 	GetActiveSessionByVehicle(licensePlate string) (*domain.ParkingSession, error)
 	GetLastSessionByVehicle(licensePlate string) (*domain.ParkingSession, error)
 	GetSession(id string) (*domain.ParkingSession, error)
@@ -72,6 +74,19 @@ func (r *MemoryRepository) GetGate(id int) (*domain.Gate, error) {
 	return g, nil
 }
 
+func (r *MemoryRepository) RemoveGate(id int) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if _, ok := r.gates[id]; !ok {
+		return domain.ErrGateNotFound
+	}
+	delete(r.gates, id)
+	for _, slot := range r.slots {
+		delete(slot.Distances, id)
+	}
+	return nil
+}
+
 func (r *MemoryRepository) AddSlot(slot *domain.ParkingSlot) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -111,6 +126,16 @@ func (r *MemoryRepository) SaveSession(session *domain.ParkingSession) error {
 	defer r.mu.Unlock()
 	r.sessions[session.ID] = session
 	return nil
+}
+
+func (r *MemoryRepository) GetSessions() ([]*domain.ParkingSession, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	sessions := make([]*domain.ParkingSession, 0, len(r.sessions))
+	for _, session := range r.sessions {
+		sessions = append(sessions, session)
+	}
+	return sessions, nil
 }
 
 func (r *MemoryRepository) GetActiveSessionByVehicle(licensePlate string) (*domain.ParkingSession, error) {

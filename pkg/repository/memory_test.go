@@ -74,6 +74,52 @@ func TestGetGates(t *testing.T) {
 	}
 }
 
+func TestRemoveGate(t *testing.T) {
+	t.Run("removes gate and its distance mapping from every slot", func(t *testing.T) {
+		r := NewMemoryRepository()
+		_ = r.AddGate(&domain.Gate{ID: 1, Name: "Gate A"})
+		_ = r.AddGate(&domain.Gate{ID: 2, Name: "Gate B"})
+		_ = r.AddSlot(&domain.ParkingSlot{ID: 101, Distances: domain.DistanceMap{1: 2, 2: 5}})
+		_ = r.AddSlot(&domain.ParkingSlot{ID: 102, Distances: domain.DistanceMap{1: 4, 2: 3}})
+
+		if err := r.RemoveGate(1); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if _, err := r.GetGate(1); !errors.Is(err, domain.ErrGateNotFound) {
+			t.Fatalf("expected removed gate to return ErrGateNotFound, got %v", err)
+		}
+		for _, slotID := range []int{101, 102} {
+			slot, err := r.GetSlot(slotID)
+			if err != nil {
+				t.Fatalf("unexpected error getting slot %d: %v", slotID, err)
+			}
+			if _, ok := slot.Distances[1]; ok {
+				t.Errorf("expected gate 1 distance to be removed from slot %d", slotID)
+			}
+			if _, ok := slot.Distances[2]; !ok {
+				t.Errorf("expected gate 2 distance to remain on slot %d", slotID)
+			}
+		}
+	})
+
+	t.Run("returns ErrGateNotFound without changing distances when gate is absent", func(t *testing.T) {
+		r := NewMemoryRepository()
+		_ = r.AddGate(&domain.Gate{ID: 1, Name: "Gate A"})
+		_ = r.AddSlot(&domain.ParkingSlot{ID: 101, Distances: domain.DistanceMap{1: 2, 99: 8}})
+
+		if err := r.RemoveGate(99); !errors.Is(err, domain.ErrGateNotFound) {
+			t.Fatalf("expected ErrGateNotFound, got %v", err)
+		}
+		slot, err := r.GetSlot(101)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if slot.Distances[99] != 8 {
+			t.Errorf("expected absent gate removal to leave distances unchanged")
+		}
+	})
+}
+
 func TestGetSlot(t *testing.T) {
 	r := NewMemoryRepository()
 	_ = r.AddSlot(&domain.ParkingSlot{
@@ -163,6 +209,29 @@ func TestUpdateSlot(t *testing.T) {
 	}
 	if !updated.IsOccupied || updated.CurrentVehicleID != "ABC-123" {
 		t.Errorf("expected slot to be occupied by ABC-123, got %+v", updated)
+	}
+}
+
+func TestGetSessions(t *testing.T) {
+	r := NewMemoryRepository()
+	first := newTestSession("ABC-123", baseTime, true)
+	second := newTestSession("XYZ-999", baseTime.Add(time.Hour), false)
+	_ = r.SaveSession(first)
+	_ = r.SaveSession(second)
+
+	sessions, err := r.GetSessions()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(sessions) != 2 {
+		t.Fatalf("expected 2 sessions, got %d", len(sessions))
+	}
+	got := make(map[string]bool)
+	for _, session := range sessions {
+		got[session.ID] = true
+	}
+	if !got[first.ID] || !got[second.ID] {
+		t.Errorf("expected sessions %q and %q, got %v", first.ID, second.ID, got)
 	}
 }
 

@@ -31,11 +31,22 @@ func TestFindOptimalSlot(t *testing.T) {
 			expectedErr: nil,
 		},
 		{
-			name:        "Tiebreaker: small vehicle gets LP Slot 2 at Gate 1",
+			name:        "Tiebreaker: small vehicle gets smaller MP Slot 2 at Gate 1",
 			slots:       setupTestSlots(),
 			vehicle:     Vehicle{LicensePlate: "TIE-001", Size: SizeSmall},
 			gateID:      1,
 			expectedID:  2,
+			expectedErr: nil,
+		},
+		{
+			name: "Exact distance and size tie selects lower slot ID with reversed input order",
+			slots: []*ParkingSlot{
+				{ID: 20, Size: SlotMP, Distances: DistanceMap{1: 2}},
+				{ID: 10, Size: SlotMP, Distances: DistanceMap{1: 2}},
+			},
+			vehicle:     Vehicle{LicensePlate: "TIE-002", Size: SizeSmall},
+			gateID:      1,
+			expectedID:  10,
 			expectedErr: nil,
 		},
 		{

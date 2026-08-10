@@ -49,12 +49,15 @@ func FindOptimalSlot(slots []*ParkingSlot, vehicle Vehicle, gateID int) (*Parkin
 		return nil, ErrNoAvailableSlot
 	}
 
-	// Slot candidate criteria: closest to gate then smallest compatible size
+	// Slot candidate criteria: closest to gate, smallest compatible size, then lowest slot ID.
 	sort.Slice(candidates, func(i, j int) bool {
 		if candidates[i].distance != candidates[j].distance {
 			return candidates[i].distance < candidates[j].distance
 		}
-		return candidates[i].slot.Size < candidates[j].slot.Size
+		if candidates[i].slot.Size != candidates[j].slot.Size {
+			return candidates[i].slot.Size < candidates[j].slot.Size
+		}
+		return candidates[i].slot.ID < candidates[j].slot.ID
 	})
 
 	return candidates[0].slot, nil

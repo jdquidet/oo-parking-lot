@@ -3,7 +3,7 @@ package main
 import (
 	"bufio"
 	"fmt"
-	"math/rand"
+
 	"os"
 	"sort"
 	"strconv"
@@ -59,7 +59,6 @@ func (app *CLIApp) seedDefaultMap() {
 }
 
 func (app *CLIApp) run() {
-
 	for {
 		clearScreen()
 
@@ -73,75 +72,53 @@ func (app *CLIApp) run() {
 		fmt.Println("2. Unpark a Vehicle")
 		fmt.Println("3. Display Parking Lot Occupancy")
 		fmt.Println("4. Add New Gate")
-		fmt.Println("5. Advance System Time")
-		fmt.Println("6. Exit")
-		fmt.Print("Select an option (1-6): ")
+		fmt.Println("5. Remove Gate")
+		fmt.Println("6. Display Session Logs")
+		fmt.Println("7. Advance System Time")
+		fmt.Println("8. Exit")
+		fmt.Print("Select an option (1-8): ")
 
 		if !app.scanner.Scan() {
-			break
+			return
 		}
 		choice := strings.TrimSpace(app.scanner.Text())
 
+		shouldWait := false
 		switch choice {
 		case "1":
-			app.handlePark()
+			shouldWait = app.handlePark()
 		case "2":
-			app.handleUnpark()
+			shouldWait = app.handleUnpark()
 		case "3":
-			app.handleDisplayMap()
+			shouldWait = app.handleDisplayMap()
 		case "4":
-			app.handleAddGate()
+			shouldWait = app.handleAddGate()
 		case "5":
-			app.handleAdvanceTime()
+			shouldWait = app.handleRemoveGate()
 		case "6":
+			shouldWait = app.handleDisplaySessionLogs()
+		case "7":
+			shouldWait = app.handleAdvanceTime()
+		case "8":
 			fmt.Println("Exiting system. Goodbye!")
 			return
 		default:
-			fmt.Println("Invalid selection. Please choose 1-6.")
+			continue
 		}
 
-		app.waitForEnter()
+		if shouldWait {
+			app.waitForEnter()
+		}
 	}
 }
 
-func (app *CLIApp) handlePark() {
+func (app *CLIApp) handlePark() bool {
 	fmt.Println("\n--- PARK VEHICLE ---")
-
-	plateVal, ok := app.readParsed(
-		"Enter Vehicle License Plate (or press Enter for random): ",
-		func(s string) (interface{}, error) {
-			if s == "" {
-				return generateRandomPlate(), nil
-			}
-			return strings.ToUpper(s), nil
-		},
-		"q to cancel",
-	)
-	if !ok {
-		return
-	}
-	plate := plateVal.(string)
-
-	sizeVal, ok := app.readParsed(
-		"Select Vehicle Size (0=Small [S], 1=Medium [M], 2=Large [L]): ",
-		func(s string) (interface{}, error) {
-			v, err := strconv.Atoi(s)
-			if err != nil || v < 0 || v > 2 {
-				return nil, fmt.Errorf("enter 0, 1, or 2")
-			}
-			return v, nil
-		},
-		"q to cancel",
-	)
-	if !ok {
-		return
-	}
-	vSize := domain.VehicleSize(sizeVal.(int))
 
 	app.printGates()
 	gateVal, ok := app.readParsed(
-		"Enter Entry Gate ID: ",
-		func(s string) (interface{}, error) {
+		"Enter Entry Gate ID (q to cancel): ",
+		func(s string) (any, error) {
 			v, err := strconv.Atoi(s)
 			if err != nil {
 				return nil, fmt.Errorf("must be a number")
@@ -154,53 +131,88 @@ func (app *CLIApp) handlePark() {
 		"q to cancel",
 	)
 	if !ok {
-		return
+		return false
 	}
 	gateID := gateVal.(int)
+
+	sizeVal, ok := app.readParsed(
+		"Select Vehicle Size (0=Small [S], 1=Medium [M], 2=Large [L], q to cancel): ",
+		func(s string) (any, error) {
+			v, err := strconv.Atoi(s)
+			if err != nil || v < 0 || v > 2 {
+				return nil, fmt.Errorf("enter 0, 1, or 2")
+			}
+			return v, nil
+		},
+		"q to cancel",
+	)
+	if !ok {
+		return false
+	}
+	vSize := domain.VehicleSize(sizeVal.(int))
+
+	if _, err := app.service.FindAvailableSlot(vSize, gateID); err != nil {
+		fmt.Printf("\nParking unavailable: %v.\n", err)
+		return true
+	}
+
+	plateVal, ok := app.readParsed(
+		"Enter Vehicle License Plate (letters, numbers, and dashes; q to cancel): ",
+		func(s string) (any, error) {
+			return domain.ValidateLicensePlate(s)
+		},
+		"q to cancel",
+	)
+	if !ok {
+		return false
+	}
+	plate := plateVal.(string)
 
 	vehicle := domain.Vehicle{LicensePlate: plate, Size: vSize}
 	session, slot, err := app.service.Park(vehicle, gateID, app.systemTime)
 	if err != nil {
 		fmt.Printf("\nPark Error: %v\n", err)
-		return
+		return true
 	}
 
-	dist, _ := slot.DistanceFrom(gateID)
 	fmt.Println("\nPARKING SUCCESSFUL!")
 	fmt.Printf("  Ticket ID:     %s\n", session.ID)
+	fmt.Printf("  License Plate: %s\n", session.VehicleID)
 	fmt.Printf("  Assigned Slot: #%d (%s)\n", slot.ID, slot.Size.String())
-	fmt.Printf("  Distance:      %d units from Gate %d\n", dist, gateID)
 	fmt.Printf("  Entry Time:    %s\n", session.EntryTime.Format("2006-01-02 15:04:05 MST"))
+	return true
 }
 
-func (app *CLIApp) handleUnpark() {
+func (app *CLIApp) handleUnpark() bool {
 	fmt.Println("\n--- UNPARK VEHICLE ---")
 
 	if app.printParkedVehicles() == 0 {
-		return
+		return true
 	}
 
 	plateVal, ok := app.readParsed(
 		"Enter Vehicle License Plate (q to cancel): ",
-		func(s string) (interface{}, error) {
-			p := strings.ToUpper(s)
-			_, err := app.repo.GetActiveSessionByVehicle(p)
+		func(s string) (any, error) {
+			plate, err := domain.ValidateLicensePlate(s)
 			if err != nil {
-				return nil, fmt.Errorf("no parked vehicle found with plate %s", p)
+				return nil, err
 			}
-			return p, nil
+			if _, err := app.repo.GetActiveSessionByVehicle(plate); err != nil {
+				return nil, fmt.Errorf("no parked vehicle found with plate %s", plate)
+			}
+			return plate, nil
 		},
-		"",
+		"q to cancel",
 	)
 	if !ok {
-		return
+		return false
 	}
 	plate := plateVal.(string)
 
 	session, fee, err := app.service.Unpark(plate, app.systemTime)
 	if err != nil {
 		fmt.Printf("\nUnpark Error: %v\n", err)
-		return
+		return true
 	}
 
 	fmt.Println("\nUNPARK RECEIPT")
@@ -211,9 +223,10 @@ func (app *CLIApp) handleUnpark() {
 	fmt.Printf("Exit Time:        %s\n", session.ExitTime.Format("2006-01-02 15:04:05"))
 	fmt.Printf("Total Fee Due:    PHP %.2f\n", fee)
 	fmt.Println("=====================================")
+	return true
 }
 
-func (app *CLIApp) handleDisplayMap() {
+func (app *CLIApp) handleDisplayMap() bool {
 	fmt.Println("\n--- PARKING LOT OCCUPANCY ---")
 	gates, _ := app.repo.GetGates()
 	slots, _ := app.repo.GetSlots()
@@ -332,16 +345,26 @@ func (app *CLIApp) handleDisplayMap() {
 	for _, g := range gates {
 		fmt.Printf("  ID %d: %s\n", g.ID, g.Name)
 	}
+	return true
 }
 
-func (app *CLIApp) handleAddGate() {
+func (app *CLIApp) handleAddGate() bool {
 	fmt.Println("\n--- ADD NEW GATE ---")
-	gates, _ := app.repo.GetGates()
-	newGateID := len(gates) + 1
+	gates, err := app.repo.GetGates()
+	if err != nil {
+		fmt.Printf("Unable to list gates: %v\n", err)
+		return true
+	}
+	newGateID := 1
+	for _, gate := range gates {
+		if gate.ID >= newGateID {
+			newGateID = gate.ID + 1
+		}
+	}
 
 	nameVal, ok := app.readParsed(
-		fmt.Sprintf("Enter Name for Gate %d (or press Enter for \"Gate %d\"): ", newGateID, newGateID),
-		func(s string) (interface{}, error) {
+		fmt.Sprintf("Enter Name for Gate %d (press Enter for \"Gate %d\", q to cancel): ", newGateID, newGateID),
+		func(s string) (any, error) {
 			if s == "" {
 				return fmt.Sprintf("Gate %d", newGateID), nil
 			}
@@ -350,22 +373,22 @@ func (app *CLIApp) handleAddGate() {
 		"q to cancel",
 	)
 	if !ok {
-		return
+		return false
 	}
 	name := nameVal.(string)
 
-	newGate := &domain.Gate{ID: newGateID, Name: name}
-	_ = app.repo.AddGate(newGate)
-
-	slots, _ := app.repo.GetSlots()
+	slots, err := app.repo.GetSlots()
+	if err != nil {
+		fmt.Printf("Unable to list slots: %v\n", err)
+		return true
+	}
 	sort.Slice(slots, func(i, j int) bool {
 		return slots[i].ID < slots[j].ID
 	})
 
 	fmt.Printf("Configuring distances from %s (ID %d) to all %d slots:\n\n", name, newGateID, len(slots))
-
-	for i, s := range slots {
-		fmt.Printf("  %2d. Slot #%-4d (%s)", i+1, s.ID, s.Size.String())
+	for i, slot := range slots {
+		fmt.Printf("  %2d. Slot #%-4d (%s)", i+1, slot.ID, slot.Size.String())
 		if (i+1)%3 == 0 || i == len(slots)-1 {
 			fmt.Println()
 		} else {
@@ -375,59 +398,193 @@ func (app *CLIApp) handleAddGate() {
 
 	fmt.Println()
 	distVal, ok := app.readParsed(
-		fmt.Sprintf("Enter %d distances (space-separated, matching order above): ", len(slots)),
-		func(s string) (interface{}, error) {
+		fmt.Sprintf("Enter %d positive distances (space-separated, matching order above; q to cancel): ", len(slots)),
+		func(s string) (any, error) {
 			fields := strings.Fields(s)
 			if len(fields) != len(slots) {
 				return nil, fmt.Errorf("expected %d values, got %d", len(slots), len(fields))
 			}
 			vals := make([]int, len(fields))
-			for i, f := range fields {
-				v, err := strconv.Atoi(f)
-				if err != nil || v < 0 {
-					return nil, fmt.Errorf("distance must be a non-negative integer, got %q", f)
+			for i, field := range fields {
+				value, err := strconv.Atoi(field)
+				if err != nil || value <= 0 {
+					return nil, fmt.Errorf("distance must be a positive integer, got %q", field)
 				}
-				vals[i] = v
+				vals[i] = value
 			}
 			return vals, nil
 		},
 		"q to cancel",
 	)
 	if !ok {
-		return
+		return false
 	}
 	distances := distVal.([]int)
 
-	fmt.Println("\nDistance Summary:")
-	for i, s := range slots {
-		s.Distances[newGateID] = distances[i]
-		_ = app.repo.UpdateSlot(s)
-		fmt.Printf("  Slot #%-4d (%s): %d units\n", s.ID, s.Size.String(), distances[i])
+	newGate := &domain.Gate{ID: newGateID, Name: name}
+	if err := app.repo.AddGate(newGate); err != nil {
+		fmt.Printf("Unable to add gate: %v\n", err)
+		return true
+	}
+	for i, slot := range slots {
+		if slot.Distances == nil {
+			slot.Distances = make(domain.DistanceMap)
+		}
+		slot.Distances[newGateID] = distances[i]
+		if err := app.repo.UpdateSlot(slot); err != nil {
+			_ = app.repo.RemoveGate(newGateID)
+			fmt.Printf("Unable to configure gate distances: %v\n", err)
+			return true
+		}
 	}
 
+	fmt.Println("\nDistance Summary:")
+	for i, slot := range slots {
+		fmt.Printf("  Slot #%-4d (%s): %d units\n", slot.ID, slot.Size.String(), distances[i])
+	}
 	fmt.Printf("\nSuccessfully added %s (ID %d)!\n", name, newGateID)
+	return true
 }
 
-func (app *CLIApp) handleAdvanceTime() {
+func (app *CLIApp) handleRemoveGate() bool {
+	fmt.Println("\n--- REMOVE GATE ---")
+	if app.printGates() == 0 {
+		return true
+	}
+
+	gateVal, ok := app.readParsed(
+		"Enter Gate ID to remove (q to cancel): ",
+		func(s string) (any, error) {
+			gateID, err := strconv.Atoi(s)
+			if err != nil {
+				return nil, fmt.Errorf("must be a number")
+			}
+			if _, err := app.repo.GetGate(gateID); err != nil {
+				return nil, fmt.Errorf("gate %d not found", gateID)
+			}
+			return gateID, nil
+		},
+		"q to cancel",
+	)
+	if !ok {
+		return false
+	}
+	gateID := gateVal.(int)
+	gate, _ := app.repo.GetGate(gateID)
+
+	confirmVal, ok := app.readParsed(
+		fmt.Sprintf("Remove %s (ID %d) and its slot distances? (y/n, q to cancel): ", gate.Name, gate.ID),
+		func(s string) (any, error) {
+			switch strings.ToLower(s) {
+			case "y", "yes":
+				return true, nil
+			case "n", "no":
+				return false, nil
+			default:
+				return nil, fmt.Errorf("enter y or n")
+			}
+		},
+		"q to cancel",
+	)
+	if !ok {
+		return false
+	}
+	if !confirmVal.(bool) {
+		fmt.Println("Gate removal cancelled.")
+		return true
+	}
+
+	if err := app.repo.RemoveGate(gateID); err != nil {
+		fmt.Printf("Unable to remove gate: %v\n", err)
+		return true
+	}
+	fmt.Printf("Successfully removed %s (ID %d).\n", gate.Name, gate.ID)
+	return true
+}
+
+func (app *CLIApp) handleDisplaySessionLogs() bool {
+	fmt.Println("\n--- PARKING SESSION LOGS ---")
+	sessions, err := app.repo.GetSessions()
+	if err != nil {
+		fmt.Printf("Unable to load session logs: %v\n", err)
+		return true
+	}
+	if len(sessions) == 0 {
+		fmt.Println("No parking sessions recorded.")
+		return true
+	}
+
+	filterVal, ok := app.readParsed(
+		"Enter a license plate to filter, press Enter to show all, or q to cancel: ",
+		func(s string) (any, error) {
+			if s == "" {
+				return "", nil
+			}
+			return domain.ValidateLicensePlate(s)
+		},
+		"q to cancel",
+	)
+	if !ok {
+		return false
+	}
+	plateFilter := filterVal.(string)
+
+	sort.Slice(sessions, func(i, j int) bool {
+		if sessions[i].EntryTime.Equal(sessions[j].EntryTime) {
+			return sessions[i].ID < sessions[j].ID
+		}
+		return sessions[i].EntryTime.After(sessions[j].EntryTime)
+	})
+
+	shown := 0
+	for _, session := range sessions {
+		if plateFilter != "" && session.VehicleID != plateFilter {
+			continue
+		}
+		shown++
+		status := "COMPLETED"
+		exitTime := "-"
+		if session.IsActive {
+			status = "ACTIVE"
+		} else if session.ExitTime != nil {
+			exitTime = session.ExitTime.Format("2006-01-02 15:04:05")
+		}
+
+		fmt.Printf("\n[%d] %s\n", shown, session.ID)
+		fmt.Printf("  License Plate: %s (%s)\n", session.VehicleID, session.VehicleSize.String())
+		fmt.Printf("  Slot:          #%d (%s)\n", session.SlotID, session.SlotSize.String())
+		fmt.Printf("  Entry Gate:    %d\n", session.GateID)
+		fmt.Printf("  Entry Time:    %s\n", session.EntryTime.Format("2006-01-02 15:04:05"))
+		fmt.Printf("  Exit Time:     %s\n", exitTime)
+		fmt.Printf("  Status:        %s\n", status)
+		fmt.Printf("  Fee Charged:   PHP %.2f\n", session.TotalFeeCharged)
+	}
+	if shown == 0 {
+		fmt.Printf("No parking sessions found for license plate %s.\n", plateFilter)
+	}
+	return true
+}
+
+func (app *CLIApp) handleAdvanceTime() bool {
 	fmt.Println("\n--- ADVANCE SYSTEM TIME ---")
 	fmt.Printf("Current Virtual Clock: %s\n", app.systemTime.Format("2006-01-02 15:04"))
 
 	durVal, ok := app.readParsed(
-		"Enter duration to jump forward (e.g., 3h, 45m, 1h30m): ",
-		func(s string) (interface{}, error) {
+		"Enter a positive duration to jump forward (e.g., 3h, 45m, 1h30m; q to cancel): ",
+		func(s string) (any, error) {
 			dur, err := time.ParseDuration(s)
 			if err != nil {
-				return nil, fmt.Errorf("invalid format. Use Go duration syntax (3h, 30m)")
+				return nil, fmt.Errorf("invalid format; use proper duration syntax such as 3h or 30m")
 			}
-			if dur < 0 {
-				return nil, fmt.Errorf("time travel into the past is not allowed")
+			if dur <= 0 {
+				return nil, fmt.Errorf("enter a positive duration")
 			}
 			return dur, nil
 		},
 		"q to cancel",
 	)
 	if !ok {
-		return
+		return false
 	}
 
 	duration := durVal.(time.Duration)
@@ -435,9 +592,10 @@ func (app *CLIApp) handleAdvanceTime() {
 
 	fmt.Printf("\nSuccess! System time fast-forwarded by %s.\n", duration.String())
 	fmt.Printf("New Virtual Clock: %s\n", app.systemTime.Format("2006-01-02 15:04 MST"))
+	return true
 }
 
-func (app *CLIApp) readParsed(prompt string, parse func(string) (interface{}, error), cancelHint string) (interface{}, bool) {
+func (app *CLIApp) readParsed(prompt string, parse func(string) (any, error), cancelHint string) (any, bool) {
 	for {
 		fmt.Print(prompt)
 		if !app.scanner.Scan() {
@@ -471,20 +629,6 @@ func (app *CLIApp) waitForEnter() {
 	app.scanner.Scan()
 }
 
-func generateRandomPlate() string {
-	const letters = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
-	const digits = "0123456789"
-	plate := make([]byte, 8)
-	for i := 0; i < 3; i++ {
-		plate[i] = letters[rand.Intn(len(letters))]
-	}
-	plate[3] = '-'
-	for i := 4; i < 8; i++ {
-		plate[i] = digits[rand.Intn(len(digits))]
-	}
-	return string(plate)
-}
-
 func (app *CLIApp) printParkedVehicles() int {
 	slots, _ := app.repo.GetSlots()
 
@@ -506,15 +650,23 @@ func (app *CLIApp) printParkedVehicles() int {
 	return count
 }
 
-func (app *CLIApp) printGates() {
-	gates, _ := app.repo.GetGates()
+func (app *CLIApp) printGates() int {
+	gates, err := app.repo.GetGates()
+	if err != nil {
+		fmt.Printf("Unable to list gates: %v\n", err)
+		return 0
+	}
 
 	sort.Slice(gates, func(i, j int) bool {
 		return gates[i].ID < gates[j].ID
 	})
 
 	fmt.Println("Available Gates:")
-	for _, g := range gates {
-		fmt.Printf("  ID %d: %s\n", g.ID, g.Name)
+	for _, gate := range gates {
+		fmt.Printf("  ID %d: %s\n", gate.ID, gate.Name)
 	}
+	if len(gates) == 0 {
+		fmt.Println("  (none)")
+	}
+	return len(gates)
 }
