@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/jdquidet/oo-parking-lot/pkg/domain"
 	"github.com/jdquidet/oo-parking-lot/pkg/repository"
@@ -536,32 +537,102 @@ func (app *CLIApp) handleDisplaySessionLogs() bool {
 		return sessions[i].EntryTime.After(sessions[j].EntryTime)
 	})
 
-	shown := 0
+	type sessionLogRow struct {
+		headerLeft         string
+		headerRight        string
+		coloredHeaderRight string
+		vehicle            string
+		assignment         string
+		entry              string
+		exit               string
+		fee                string
+	}
+
+	rows := make([]sessionLogRow, 0, len(sessions))
 	for _, session := range sessions {
 		if plateFilter != "" && session.VehicleID != plateFilter {
 			continue
 		}
-		shown++
+
 		status := "COMPLETED"
+		statusColor := ""
 		exitTime := "-"
 		if session.IsActive {
 			status = "ACTIVE"
+			statusColor = "\033[32m"
 		} else if session.ExitTime != nil {
 			exitTime = session.ExitTime.Format("2006-01-02 15:04:05")
 		}
 
-		fmt.Printf("\n[%d] %s\n", shown, session.ID)
-		fmt.Printf("  License Plate: %s (%s)\n", session.VehicleID, session.VehicleSize.String())
-		fmt.Printf("  Slot:          #%d (%s)\n", session.SlotID, session.SlotSize.String())
-		fmt.Printf("  Entry Gate:    %d\n", session.GateID)
-		fmt.Printf("  Entry Time:    %s\n", session.EntryTime.Format("2006-01-02 15:04:05"))
-		fmt.Printf("  Exit Time:     %s\n", exitTime)
-		fmt.Printf("  Status:        %s\n", status)
-		fmt.Printf("  Fee Charged:   PHP %.2f\n", session.TotalFeeCharged)
+		gateLabel := fmt.Sprintf("Gate #%d", session.GateID)
+		if gate, err := app.repo.GetGate(session.GateID); err == nil && gate.Name != "" {
+			gateLabel = fmt.Sprintf("%s", gate.Name)
+		}
+
+		headerRight := fmt.Sprintf("[ %s ]", status)
+		coloredHeaderRight := headerRight
+		if statusColor != "" {
+			coloredHeaderRight = fmt.Sprintf("[ %s%s\033[0m ]", statusColor, status)
+		}
+
+		rows = append(rows, sessionLogRow{
+			headerLeft:         fmt.Sprintf("TICKET %s", session.ID),
+			headerRight:        headerRight,
+			coloredHeaderRight: coloredHeaderRight,
+			vehicle:            fmt.Sprintf("%s (%s)", session.VehicleID, session.VehicleSize.String()),
+			assignment:         fmt.Sprintf("Slot #%d (%s)  •  Entered at %s", session.SlotID, session.SlotSize.String(), gateLabel),
+			entry:              fmt.Sprintf("In:  %s", session.EntryTime.Format("2006-01-02 15:04:05")),
+			exit:               fmt.Sprintf("Out: %s", exitTime),
+			fee:                fmt.Sprintf("PHP %.2f", session.TotalFeeCharged),
+		})
 	}
-	if shown == 0 {
+
+	if len(rows) == 0 {
 		fmt.Printf("No parking sessions found for license plate %s.\n", plateFilter)
+		return true
 	}
+
+	displayWidth := utf8.RuneCountInString
+	leftWidth := displayWidth("Assignment")
+	rightWidth := 0
+	for _, row := range rows {
+		for _, value := range []string{row.vehicle, row.assignment, row.entry, row.exit, row.fee} {
+			if width := displayWidth(value); width > rightWidth {
+				rightWidth = width
+			}
+		}
+	}
+
+	totalWidth := leftWidth + rightWidth + 5
+	for _, row := range rows {
+		headerWidth := displayWidth(row.headerLeft) + displayWidth(row.headerRight) + 4
+		if headerWidth > totalWidth {
+			totalWidth = headerWidth
+		}
+	}
+	rightWidth = totalWidth - leftWidth - 5
+
+	const timeline = "  │  "
+	fmt.Println("\nNEWEST")
+	fmt.Printf("%s┌%s┐\n", timeline, strings.Repeat("─", totalWidth))
+	for i, row := range rows {
+		headerPadding := totalWidth - displayWidth(row.headerLeft) - displayWidth(row.headerRight) - 2
+		fmt.Printf("  ●  │ %s%s%s │\n", row.headerLeft, strings.Repeat(" ", headerPadding), row.coloredHeaderRight)
+		fmt.Printf("%s├%s┬%s┤\n", timeline, strings.Repeat("─", leftWidth+2), strings.Repeat("─", rightWidth+2))
+		fmt.Printf("%s│ %-*s │ %-*s │\n", timeline, leftWidth, "Vehicle", rightWidth, row.vehicle)
+		fmt.Printf("%s│ %-*s │ %-*s │\n", timeline, leftWidth, "Assignment", rightWidth, row.assignment)
+		fmt.Printf("%s│ %-*s │ %-*s │\n", timeline, leftWidth, "Timeline", rightWidth, row.entry)
+		fmt.Printf("%s│ %-*s │ %-*s │\n", timeline, leftWidth, "", rightWidth, row.exit)
+		fmt.Printf("%s│ %-*s │ %-*s │\n", timeline, leftWidth, "Fee", rightWidth, row.fee)
+
+		if i < len(rows)-1 {
+			fmt.Printf("%s├%s┴%s┤\n", timeline, strings.Repeat("─", leftWidth+2), strings.Repeat("─", rightWidth+2))
+		} else {
+			fmt.Printf("%s└%s┴%s┘\n", timeline, strings.Repeat("─", leftWidth+2), strings.Repeat("─", rightWidth+2))
+		}
+	}
+	fmt.Println("  ▼")
+	fmt.Println("OLDER")
 	return true
 }
 

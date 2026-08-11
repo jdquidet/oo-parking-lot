@@ -18,8 +18,8 @@ func TestParkingService_ParkAndUnpark(t *testing.T) {
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
-		if slot.ID != 102 { // Parking slot 102 is the most optimal
-			t.Errorf("expected slot 102, got %d", slot.ID)
+		if slot.ID != optimalSlotID { // closest compatible slot to gate 1
+			t.Errorf("expected slot %d, got %d", optimalSlotID, slot.ID)
 		}
 		if !session.IsActive {
 			t.Errorf("expected session to be active")
@@ -54,8 +54,8 @@ func TestParkingService_FindAvailableSlot(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if slot.ID != 102 {
-		t.Errorf("expected slot 102, got %d", slot.ID)
+	if slot.ID != optimalSlotID {
+		t.Errorf("expected slot %d, got %d", optimalSlotID, slot.ID)
 	}
 	if slot.IsOccupied {
 		t.Errorf("expected availability lookup not to occupy the slot")
@@ -65,7 +65,7 @@ func TestParkingService_FindAvailableSlot(t *testing.T) {
 		t.Errorf("expected ErrGateNotFound for invalid gate, got %v", err)
 	}
 
-	largeSlot, _ := repo.GetSlot(102)
+	largeSlot, _ := repo.GetSlot(optimalSlotID)
 	largeSlot.IsOccupied = true
 	_ = repo.UpdateSlot(largeSlot)
 	if _, err := s.FindAvailableSlot(domain.SizeLarge, 1); !errors.Is(err, domain.ErrNoAvailableSlot) {
@@ -213,6 +213,8 @@ func TestParkingService_ContinuedSessions(t *testing.T) {
 		}
 	})
 }
+
+const optimalSlotID = 102 // Slot 102 (LP at distance 1 from gate 1) is the closest compatible slot for small vehicles
 
 func setupTestService() (ParkingService, repository.ParkingRepository) {
 	repo := repository.NewMemoryRepository()

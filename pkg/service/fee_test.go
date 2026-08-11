@@ -193,7 +193,7 @@ func TestCalculateFee_ContinuedSessions(t *testing.T) {
 			expected: 200.0,
 		},
 		{
-			name:      "24h+ last session with 24h+ continued session  (SP -> LP): SP(25h) + LP(30m+25h)",
+			name:      "24h+ last session with 24h+ continued session (SP -> LP): SP(25h) + LP(30m+25h)",
 			slot:      domain.SlotLP,
 			entryTime: baseTime.Add(25*time.Hour + 30*time.Minute),
 			exitTime:  baseTime.Add(50*time.Hour + 30*time.Minute),

@@ -5,9 +5,11 @@ import (
 	"bytes"
 	"io"
 	"os"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/jdquidet/oo-parking-lot/pkg/domain"
 	"github.com/jdquidet/oo-parking-lot/pkg/repository"
@@ -141,12 +143,138 @@ func TestHandleDisplaySessionLogsSupportsValidPlateFilter(t *testing.T) {
 		}
 	})
 
-	for _, expected := range []string{"SESS-ABC-123", "License Plate: ABC-123", "Status:        ACTIVE"} {
-		if !strings.Contains(output, expected) {
-			t.Fatalf("expected %q in session log output:\n%s", expected, output)
+	cleanOutput := stripANSI(output)
+	for _, expected := range []string{
+		"SESS-ABC-123",
+		"Vehicle    │ ABC-123",
+		"ACTIVE",
+		"Entered at Gate #1",
+		"NEWEST",
+		"OLDER",
+	} {
+		if !strings.Contains(cleanOutput, expected) {
+			t.Fatalf("expected %q in session log output:\n%s", expected, cleanOutput)
 		}
 	}
 }
+
+func TestHandleDisplaySessionLogsRendersConnectedChronologicalLedger(t *testing.T) {
+	app, repo := newTestCLI("\n")
+	if err := repo.AddGate(&domain.Gate{ID: 1, Name: "North Entrance"}); err != nil {
+		t.Fatal(err)
+	}
+
+	olderExit := cliTestTime.Add(-2 * time.Hour)
+	older := &domain.ParkingSession{
+		ID:              "SESS-OLDER",
+		VehicleID:       "OLD-100",
+		VehicleSize:     domain.SizeSmall,
+		SlotID:          101,
+		SlotSize:        domain.SlotSP,
+		GateID:          1,
+		EntryTime:       cliTestTime.Add(-3 * time.Hour),
+		ExitTime:        &olderExit,
+		TotalFeeCharged: 90,
+	}
+	newer := &domain.ParkingSession{
+		ID:          "SESS-NEWER",
+		VehicleID:   "NEW-200",
+		VehicleSize: domain.SizeMedium,
+		SlotID:      202,
+		SlotSize:    domain.SlotMP,
+		GateID:      1,
+		EntryTime:   cliTestTime,
+		IsActive:    true,
+	}
+	for _, session := range []*domain.ParkingSession{older, newer} {
+		if err := repo.SaveSession(session); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	output := stripANSI(captureStdout(t, func() {
+		if !app.handleDisplaySessionLogs() {
+			t.Fatal("expected displayed logs to request a pause")
+		}
+	}))
+
+	newerIndex := strings.Index(output, "TICKET SESS-NEWER")
+	olderIndex := strings.Index(output, "TICKET SESS-OLDER")
+	if newerIndex < 0 || olderIndex < 0 || newerIndex >= olderIndex {
+		t.Fatalf("expected sessions in newest-to-oldest order; output:\n%s", output)
+	}
+	if strings.Count(output, "  ●  │") != 2 {
+		t.Fatalf("expected one timeline marker per session; output:\n%s", output)
+	}
+}
+
+func TestHandleDisplaySessionLogsAlignsBordersForLongTicketIDs(t *testing.T) {
+	app, repo := newTestCLI("\n")
+	if err := repo.AddGate(&domain.Gate{ID: 3, Name: "East Wing"}); err != nil {
+		t.Fatal(err)
+	}
+
+	longPlate := "LONG-PLATE-NUMBER-POTENTIALLY-EXCEEDING-BORDER"
+	sessions := []*domain.ParkingSession{
+		{
+			ID:          "SESS-" + longPlate + "-1786388340000000000",
+			VehicleID:   longPlate,
+			VehicleSize: domain.SizeMedium,
+			SlotID:      303,
+			SlotSize:    domain.SlotMP,
+			GateID:      3,
+			EntryTime:   cliTestTime,
+			IsActive:    true,
+		},
+		{
+			ID:          "SESS-SHORT-1",
+			VehicleID:   "SHORT-1",
+			VehicleSize: domain.SizeSmall,
+			SlotID:      101,
+			SlotSize:    domain.SlotSP,
+			GateID:      3,
+			EntryTime:   cliTestTime.Add(-time.Hour),
+			IsActive:    true,
+		},
+	}
+	for _, session := range sessions {
+		if err := repo.SaveSession(session); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	output := stripANSI(captureStdout(t, func() {
+		if !app.handleDisplaySessionLogs() {
+			t.Fatal("expected displayed logs to request a pause")
+		}
+	}))
+
+	var ledgerLines []string
+	for _, line := range strings.Split(output, "\n") {
+		if strings.HasPrefix(line, "  │  ") || strings.HasPrefix(line, "  ●  ") {
+			ledgerLines = append(ledgerLines, line)
+		}
+	}
+	if len(ledgerLines) == 0 {
+		t.Fatalf("expected rendered ledger lines; output:\n%s", output)
+	}
+
+	wantWidth := utf8.RuneCountInString(ledgerLines[0])
+	for _, line := range ledgerLines {
+		if gotWidth := utf8.RuneCountInString(line); gotWidth != wantWidth {
+			t.Fatalf("expected aligned right borders of width %d, got %d for line %q", wantWidth, gotWidth, line)
+		}
+		if !strings.ContainsAny(line[len(line)-len("┘"):], "┐│┤┘") {
+			t.Fatalf("expected line to end at the ledger's right border: %q", line)
+		}
+	}
+}
+
+func stripANSI(value string) string {
+	return ansiPattern.ReplaceAllString(value, "")
+}
+
+var ansiPattern = regexp.MustCompile(`\x1b\[[0-9;]*m`)
 
 func newTestCLI(input string) (*CLIApp, *repository.MemoryRepository) {
 	repo := repository.NewMemoryRepository()
