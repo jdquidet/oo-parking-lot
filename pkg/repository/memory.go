@@ -1,7 +1,10 @@
 package repository
 
 import (
+	"encoding/json"
 	"errors"
+	"os"
+	"sort"
 	"sync"
 
 	"github.com/jdquidet/oo-parking-lot/pkg/domain"
@@ -14,6 +17,9 @@ var (
 
 // ParkingRepository defines operations for managing system state.
 type ParkingRepository interface {
+	SaveToFile(filename string) error
+	LoadFromFile(filename string) error
+
 	AddGate(gate *domain.Gate) error
 	GetGates() ([]*domain.Gate, error)
 	GetGate(id int) (*domain.Gate, error)
@@ -164,6 +170,76 @@ func (r *MemoryRepository) GetLastSessionByVehicle(licensePlate string) (*domain
 		return nil, ErrSessionNotFound
 	}
 	return last, nil
+}
+
+type StateData struct {
+	Gates    map[int]*domain.Gate              `json:"gates"`
+	Slots    map[int]*domain.ParkingSlot       `json:"slots"`
+	Sessions map[string]*domain.ParkingSession `json:"sessions"`
+}
+
+func (r *MemoryRepository) SaveToFile(filename string) error {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	data := StateData{
+		Gates:    r.gates,
+		Slots:    r.slots,
+		Sessions: r.sessions,
+	}
+
+	bytes, err := json.MarshalIndent(data, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(filename, bytes, 0644)
+}
+
+func (r *MemoryRepository) LoadFromFile(filename string) error {
+	bytes, err := os.ReadFile(filename)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil // Nothing to load
+		}
+		return err
+	}
+
+	var data StateData
+	if err := json.Unmarshal(bytes, &data); err != nil {
+		return err
+	}
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	if data.Gates != nil {
+		r.gates = data.Gates
+	}
+	if data.Slots != nil {
+		r.slots = data.Slots
+	}
+	if data.Sessions != nil {
+		r.sessions = data.Sessions
+	}
+
+	// Reconstruct PreviousSession links
+	// Group sessions by VehicleID
+	vehicleSessions := make(map[string][]*domain.ParkingSession)
+	for _, s := range r.sessions {
+		vehicleSessions[s.VehicleID] = append(vehicleSessions[s.VehicleID], s)
+	}
+
+	// Sort and relink
+	for _, sessions := range vehicleSessions {
+		sort.Slice(sessions, func(i, j int) bool {
+			return sessions[i].EntryTime.Before(sessions[j].EntryTime)
+		})
+		for i := 1; i < len(sessions); i++ {
+			sessions[i].PreviousSession = sessions[i-1]
+		}
+	}
+
+	return nil
 }
 
 func (r *MemoryRepository) GetSession(id string) (*domain.ParkingSession, error) {

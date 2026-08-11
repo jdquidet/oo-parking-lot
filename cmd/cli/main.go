@@ -25,6 +25,10 @@ type CLIApp struct {
 
 func main() {
 	repo := repository.NewMemoryRepository()
+
+	// Attempt to load previous state
+	_ = repo.LoadFromFile("state.json")
+
 	svc := service.NewParkingService(repo)
 	app := &CLIApp{
 		repo:       repo,
@@ -33,7 +37,12 @@ func main() {
 		systemTime: time.Now().Truncate(time.Minute),
 	}
 
-	app.seedDefaultMap()
+	// If no gates were loaded, initialize default map
+	gates, _ := repo.GetGates()
+	if len(gates) == 0 {
+		app.seedDefaultMap()
+	}
+
 	app.run()
 }
 
@@ -85,26 +94,36 @@ func (app *CLIApp) run() {
 		choice := strings.TrimSpace(app.scanner.Text())
 
 		shouldWait := false
+		shouldSave := false
 		switch choice {
 		case "1":
 			shouldWait = app.handlePark()
+			shouldSave = true
 		case "2":
 			shouldWait = app.handleUnpark()
+			shouldSave = true
 		case "3":
 			shouldWait = app.handleDisplayMap()
 		case "4":
 			shouldWait = app.handleAddGate()
+			shouldSave = true
 		case "5":
 			shouldWait = app.handleRemoveGate()
+			shouldSave = true
 		case "6":
 			shouldWait = app.handleDisplaySessionLogs()
 		case "7":
 			shouldWait = app.handleAdvanceTime()
+			shouldSave = true
 		case "8":
 			fmt.Println("Exiting system. Goodbye!")
 			return
 		default:
 			continue
+		}
+
+		if shouldSave {
+			_ = app.repo.SaveToFile("state.json")
 		}
 
 		if shouldWait {

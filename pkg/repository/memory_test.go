@@ -2,6 +2,7 @@ package repository
 
 import (
 	"errors"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -9,6 +10,88 @@ import (
 )
 
 var baseTime = time.Date(2026, time.August, 11, 17, 0, 0, 0, time.FixedZone("UTC+8", 8*60*60))
+
+func TestSaveAndLoadFromFile(t *testing.T) {
+	tempDir := t.TempDir()
+	stateFile := filepath.Join(tempDir, "state.json")
+
+	// 1. Create a repository and populate it with data
+	r1 := NewMemoryRepository()
+	_ = r1.AddGate(&domain.Gate{ID: 1, Name: "Gate A"})
+	_ = r1.AddSlot(&domain.ParkingSlot{
+		ID:               101,
+		Size:             domain.SlotSP,
+		Distances:        domain.DistanceMap{1: 2},
+		IsOccupied:       true,
+		CurrentVehicleID: "ABC-123",
+	})
+
+	// Add chained sessions to test PreviousSession relinking
+	sess1 := &domain.ParkingSession{
+		ID:        "SESS-1",
+		VehicleID: "ABC-123",
+		EntryTime: baseTime,
+		ExitTime:  timePtr(baseTime.Add(1 * time.Hour)),
+		IsActive:  false,
+	}
+	sess2 := &domain.ParkingSession{
+		ID:              "SESS-2",
+		VehicleID:       "ABC-123",
+		EntryTime:       baseTime.Add(2 * time.Hour),
+		IsActive:        true,
+		PreviousSession: sess1,
+	}
+	_ = r1.SaveSession(sess1)
+	_ = r1.SaveSession(sess2)
+
+	// 2. Save state to file
+	err := r1.SaveToFile(stateFile)
+	if err != nil {
+		t.Fatalf("failed to save to file: %v", err)
+	}
+
+	// 3. Create a new repository and load state from the file
+	r2 := NewMemoryRepository()
+	err = r2.LoadFromFile(stateFile)
+	if err != nil {
+		t.Fatalf("failed to load from file: %v", err)
+	}
+
+	// 4. Verify data was loaded correctly
+	gates, _ := r2.GetGates()
+	if len(gates) != 1 || gates[0].Name != "Gate A" {
+		t.Errorf("expected 1 gate 'Gate A', got %v", gates)
+	}
+
+	slot, _ := r2.GetSlot(101)
+	if slot == nil || !slot.IsOccupied || slot.CurrentVehicleID != "ABC-123" {
+		t.Errorf("expected slot 101 to be occupied by 'ABC-123', got %+v", slot)
+	}
+
+	// Check if sessions were loaded and PreviousSession was correctly relinked
+	loadedSess2, err := r2.GetSession("SESS-2")
+	if err != nil {
+		t.Fatalf("failed to get SESS-2: %v", err)
+	}
+
+	if loadedSess2.PreviousSession == nil {
+		t.Fatal("expected SESS-2 to have a PreviousSession linked")
+	}
+
+	if loadedSess2.PreviousSession.ID != "SESS-1" {
+		t.Errorf("expected PreviousSession ID to be 'SESS-1', got '%s'", loadedSess2.PreviousSession.ID)
+	}
+}
+
+func TestLoadFromFile_NotExists(t *testing.T) {
+	r := NewMemoryRepository()
+
+	// Should return nil (no error) when file does not exist
+	err := r.LoadFromFile("non_existent_state.json")
+	if err != nil {
+		t.Fatalf("expected nil when file doesn't exist, got error: %v", err)
+	}
+}
 
 func TestGetGate(t *testing.T) {
 	r := NewMemoryRepository()

@@ -27,3 +27,6 @@ Thumbs.db
 # Editor Swap Files
 *.swp
 *.swo
+
+# Local state storage
+state.json
