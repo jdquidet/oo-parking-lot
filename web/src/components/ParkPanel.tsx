@@ -137,7 +137,7 @@ export function ParkPanel({ gates, occupiedPlates, onMutate }: ParkPanelProps) {
             <div className="form-row">
               <label>Vehicle Size</label>
               <div className="size-toggles">
-                {(Object.keys(slotSizeLabels) as Array<unknown> as VehicleSize[]).map(
+                {(Object.keys(slotSizeLabels).map(Number) as VehicleSize[]).map(
                   (s) => (
                     <button
                       key={s}
