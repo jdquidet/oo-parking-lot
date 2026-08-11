@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useState } from 'react'
 import { getParkingState } from './api/parking'
+import { GateManager } from './components/GateManager'
 import { LotMap } from './components/LotMap'
 import { ParkPanel } from './components/ParkPanel'
+import { SessionLog } from './components/SessionLog'
 import { SystemHeader } from './components/SystemHeader'
 import type { ParkingState } from './types'
 
@@ -79,16 +81,23 @@ function App() {
         )}
 
         {state && (
-          <div className="dashboard-grid">
-            <div className="dashboard-col">
+          <div className="dashboard-layout">
+            <div className="left-panel">
               <ParkPanel
                 gates={state.gates}
                 occupiedPlates={occupiedPlates}
                 onMutate={triggerRefresh}
               />
+              <GateManager
+                gates={state.gates}
+                slots={state.slots}
+                onMutate={triggerRefresh}
+              />
             </div>
-            <div className="dashboard-col">
+
+            <div className="right-panel">
               <LotMap gates={state.gates} slots={state.slots} />
+              <SessionLog gates={state.gates} />
             </div>
           </div>
         )}
