@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { getParkingState } from './api/parking'
 import { LotMap } from './components/LotMap'
+import { ParkPanel } from './components/ParkPanel'
 import { SystemHeader } from './components/SystemHeader'
 import type { ParkingState } from './types'
 
@@ -42,11 +43,21 @@ function App() {
     }
   }, [loadState])
 
+  const triggerRefresh = useCallback(() => {
+    void loadState()
+  }, [loadState])
+
+  const occupiedPlates =
+    state?.slots
+      .filter((s) => s.is_occupied && s.current_vehicle_id)
+      .map((s) => s.current_vehicle_id!) ?? []
+
   return (
     <div className="app-shell">
       <SystemHeader
         systemTime={state?.systemTime}
         isRefreshing={isRefreshing}
+        onMutate={triggerRefresh}
       />
 
       <main>
@@ -54,7 +65,7 @@ function App() {
           <div className="state-message is-error" role="alert">
             <span>Connection interrupted</span>
             <p>{error}. Confirm the Go server is running on port 8080.</p>
-            <button type="button" onClick={() => void loadState()}>
+            <button type="button" onClick={triggerRefresh}>
               Retry
             </button>
           </div>
@@ -67,7 +78,20 @@ function App() {
           </div>
         )}
 
-        {state && <LotMap gates={state.gates} slots={state.slots} />}
+        {state && (
+          <div className="dashboard-grid">
+            <div className="dashboard-col">
+              <ParkPanel
+                gates={state.gates}
+                occupiedPlates={occupiedPlates}
+                onMutate={triggerRefresh}
+              />
+            </div>
+            <div className="dashboard-col">
+              <LotMap gates={state.gates} slots={state.slots} />
+            </div>
+          </div>
+        )}
       </main>
 
       <footer>
